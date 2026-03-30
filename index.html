@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CapCut JSON → SRT (Chính xác từ words)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f8f9fa;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 25px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        header {
+            background: #0066ff;
+            color: white;
+            padding: 25px;
+            text-align: center;
+        }
+
+        .drop-zone {
+            border: 4px dashed #0066ff;
+            padding: 60px 20px;
+            margin: 25px;
+            border-radius: 12px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .drop-zone.dragover {
+            background: #e3f2fd;
+            border-color: #0099ff;
+        }
+
+        button {
+            padding: 14px 32px;
+            font-size: 16px;
+            margin: 10px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background: #0066ff;
+            color: white;
+        }
+
+        .btn-download {
+            background: #28a745;
+            color: white;
+        }
+
+        #status {
+            margin: 15px 25px;
+            font-weight: bold;
+            font-size: 17px;
+        }
+
+        #preview {
+            margin: 20px 25px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: #fafafa;
+            font-family: monospace;
+            font-size: 14.5px;
+            padding: 18px;
+            max-height: 520px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            text-align: left;
+            line-height: 1.5;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>CapCut JSON → SRT Converter</h1>
+            <p>Thời gian chính xác từ "words" • Preview toàn bộ</p>
+        </header>
+
+        <div class="drop-zone" id="dropZone">
+            Kéo thả file draft_content.json vào đây<br>hoặc click để chọn
+        </div>
+        <input type="file" id="fileInput" accept=".json" style="display:none">
+
+        <div style="text-align:center; padding:10px 20px;">
+            <button class="btn-primary" onclick="document.getElementById('fileInput').click()">Chọn File JSON</button>
+        </div>
+
+        <div id="status"></div>
+
+        <div id="previewContainer" class="hidden">
+            <h3 style="margin: 10px 25px;">📋 Toàn bộ kết quả SRT</h3>
+            <div id="preview"></div>
+            <div style="text-align:center; padding:15px;">
+                <button id="downloadBtn" class="btn-download">⬇️ Tải file SRT về</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ====================== Web Worker - SỬ DỤNG WORDS ======================
+        const workerCode = `
+      self.onmessage = function(e) {
+        const { fileContent } = e.data;
+        let srt = '';
+        let index = 1;
+
+        function msToSrtTime(ms) {
+          const total = Math.round(ms);
+          const hours = Math.floor(total / 3600000);
+          const minutes = Math.floor((total % 3600000) / 60000);
+          const seconds = Math.floor((total % 60000) / 1000);
+          const millis = total % 1000;
+          return \`\${hours.toString().padStart(2,'0')}:\${minutes.toString().padStart(2,'0')}:\${seconds.toString().padStart(2,'0')},\${millis.toString().padStart(3,'0')}\`;
+        }
+
+        function extractSubs(obj) {
+          if (!obj || typeof obj !== 'object') return;
+
+          if (obj.subtitle_cache_info && typeof obj.subtitle_cache_info === 'string') {
+            try {
+              const cache = JSON.parse(obj.subtitle_cache_info);
+              if (cache.sentence_list && Array.isArray(cache.sentence_list)) {
+                cache.sentence_list.forEach(sentence => {
+                  const text = (sentence.text || '').trim();
+                  if (!text) return;
+
+                  let startMs = sentence.start_time || 0;
+                  let endMs = sentence.end_time || 0;
+
+                  // Ưu tiên dùng words nếu có (chính xác hơn)
+                  if (sentence.words && typeof sentence.words === 'object') {
+                    const words = sentence.words;
+                    if (Array.isArray(words.start_time) && words.start_time.length > 0) {
+                      // Lấy start_time của token đầu tiên không phải khoảng trắng
+                      for (let i = 0; i < words.start_time.length; i++) {
+                        if ((words.text[i] || '').trim() !== '') {
+                          startMs = words.start_time[i];
+                          break;
+                        }
+                      }
+                      // Lấy end_time của token cuối cùng không phải khoảng trắng
+                      for (let i = words.end_time.length - 1; i >= 0; i--) {
+                        if ((words.text[i] || '').trim() !== '') {
+                          endMs = words.end_time[i];
+                          break;
+                        }
+                      }
+                    }
+                  }
+
+                  const start = msToSrtTime(startMs);
+                  const end = msToSrtTime(endMs);
+
+                  srt += \`\${index}\n\${start} --> \${end}\n\${text}\n\n\`;
+                  index++;
+                });
+              }
+            } catch (err) {}
+          }
+
+          if (Array.isArray(obj)) obj.forEach(item => extractSubs(item));
+          else Object.values(obj).forEach(val => extractSubs(val));
+        }
+
+        try {
+          const data = JSON.parse(fileContent);
+          extractSubs(data);
+          self.postMessage({ success: true, srtContent: srt, count: index - 1 });
+        } catch (err) {
+          self.postMessage({ success: false, error: err.message });
+        }
+      };
+    `;
+
+        const worker = new Worker(URL.createObjectURL(new Blob([workerCode], {type: 'application/javascript'})));
+
+        // ====================== UI ======================
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const statusEl = document.getElementById('status');
+        const previewContainer = document.getElementById('previewContainer');
+        const previewEl = document.getElementById('preview');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        let currentSrtContent = '';
+
+        function setStatus(msg, success = false) {
+            statusEl.textContent = msg;
+            statusEl.style.color = success ? '#28a745' : '#d32f2f';
+        }
+
+        async function processFile(file) {
+            setStatus(`Đang đọc file (${(file.size / 1048576).toFixed(1)} MB)...`);
+
+            try {
+                const content = await file.text();
+                setStatus('Đang xử lý thời gian từ "words"...');
+
+                worker.onmessage = (e) => {
+                    if (e.data.success) {
+                        currentSrtContent = e.data.srtContent;
+                        previewEl.textContent = currentSrtContent || "Không tìm thấy phụ đề.";
+                        previewContainer.classList.remove('hidden');
+                        setStatus(`✅ Hoàn thành! Tổng ${e.data.count} dòng phụ đề.`, true);
+                    } else {
+                        setStatus(`❌ Lỗi: ${e.data.error}`);
+                    }
+                };
+
+                worker.postMessage({fileContent: content});
+
+            } catch (err) {
+                setStatus(`❌ Lỗi: ${err.message}`);
+            }
+        }
+
+        downloadBtn.onclick = () => {
+            if (!currentSrtContent) return;
+            const blob = new Blob([currentSrtContent], {type: 'text/plain;charset=utf-8'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'subtitle.srt';
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = e => e.target.files[0] && processFile(e.target.files[0]);
+
+        dropZone.ondragover = e => {e.preventDefault(); dropZone.classList.add('dragover');};
+        dropZone.ondragleave = () => dropZone.classList.remove('dragover');
+        dropZone.ondrop = e => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]);
+        };
+    </script>
+</body>
+
+</html>
