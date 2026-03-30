@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CapCut JSON → SRT (Chính xác từ words)</title>
+    <title>CapCut JSON → SRT Converter</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -44,13 +44,21 @@
             border-color: #0099ff;
         }
 
+        .button-group {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            padding: 15px 20px;
+            flex-wrap: wrap;
+        }
+
         button {
             padding: 14px 32px;
             font-size: 16px;
-            margin: 10px;
             border: none;
             border-radius: 8px;
             cursor: pointer;
+            min-width: 180px;
         }
 
         .btn-primary {
@@ -58,15 +66,24 @@
             color: white;
         }
 
+        .btn-primary:hover {
+            background: #0055dd;
+        }
+
         .btn-download {
             background: #28a745;
             color: white;
         }
 
+        .btn-download:hover {
+            background: #218838;
+        }
+
         #status {
-            margin: 15px 25px;
+            margin: 10px 25px;
             font-weight: bold;
             font-size: 17px;
+            text-align: center;
         }
 
         #preview {
@@ -100,10 +117,17 @@
         <div class="drop-zone" id="dropZone">
             Kéo thả file draft_content.json vào đây<br>hoặc click để chọn
         </div>
+
         <input type="file" id="fileInput" accept=".json" style="display:none">
 
-        <div style="text-align:center; padding:10px 20px;">
-            <button class="btn-primary" onclick="document.getElementById('fileInput').click()">Chọn File JSON</button>
+        <!-- Button group cùng hàng -->
+        <div class="button-group">
+            <button class="btn-primary" onclick="document.getElementById('fileInput').click()">
+                Chọn File JSON
+            </button>
+            <button id="downloadBtn" class="btn-download hidden">
+                ⬇️ Tải file SRT về
+            </button>
         </div>
 
         <div id="status"></div>
@@ -111,14 +135,11 @@
         <div id="previewContainer" class="hidden">
             <h3 style="margin: 10px 25px;">📋 Toàn bộ kết quả SRT</h3>
             <div id="preview"></div>
-            <div style="text-align:center; padding:15px;">
-                <button id="downloadBtn" class="btn-download">⬇️ Tải file SRT về</button>
-            </div>
         </div>
     </div>
 
     <script>
-        // ====================== Web Worker - SỬ DỤNG WORDS ======================
+        // ====================== Web Worker ======================
         const workerCode = `
       self.onmessage = function(e) {
         const { fileContent } = e.data;
@@ -148,18 +169,15 @@
                   let startMs = sentence.start_time || 0;
                   let endMs = sentence.end_time || 0;
 
-                  // Ưu tiên dùng words nếu có (chính xác hơn)
                   if (sentence.words && typeof sentence.words === 'object') {
                     const words = sentence.words;
                     if (Array.isArray(words.start_time) && words.start_time.length > 0) {
-                      // Lấy start_time của token đầu tiên không phải khoảng trắng
                       for (let i = 0; i < words.start_time.length; i++) {
                         if ((words.text[i] || '').trim() !== '') {
                           startMs = words.start_time[i];
                           break;
                         }
                       }
-                      // Lấy end_time của token cuối cùng không phải khoảng trắng
                       for (let i = words.end_time.length - 1; i >= 0; i--) {
                         if ((words.text[i] || '').trim() !== '') {
                           endMs = words.end_time[i];
@@ -222,6 +240,7 @@
                         currentSrtContent = e.data.srtContent;
                         previewEl.textContent = currentSrtContent || "Không tìm thấy phụ đề.";
                         previewContainer.classList.remove('hidden');
+                        downloadBtn.classList.remove('hidden');   // Hiện nút tải
                         setStatus(`✅ Hoàn thành! Tổng ${e.data.count} dòng phụ đề.`, true);
                     } else {
                         setStatus(`❌ Lỗi: ${e.data.error}`);
